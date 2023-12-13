@@ -118,22 +118,12 @@ class BaichuanAttention(torch.nn.Module):
         self.max_position_embeddings = config.model_max_length
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
-            raise ValueError(
-                f"hidden_size {self.hidden_size} is not divisible by num_heads {self.num_heads}"
-            )
-        self.W_pack = torch.nn.Linear(
-            self.hidden_size, 3 * self.hidden_size, bias=False
-        )
-        self.o_proj = torch.nn.Linear(
-            self.num_heads * self.head_dim, self.hidden_size, bias=False
-        )
+            raise ValueError(f"hidden_size {self.hidden_size} is not divisible by num_heads {self.num_heads}")
+        self.W_pack = torch.nn.Linear(self.hidden_size, 3 * self.hidden_size, bias=False)
+        self.o_proj = torch.nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
-        return (
-            tensor.view(bsz, seq_len, self.num_heads, self.head_dim)
-            .transpose(1, 2)
-            .contiguous()
-        )
+        return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
     def forward(
         self,
@@ -146,21 +136,10 @@ class BaichuanAttention(torch.nn.Module):
         bsz, q_len, _ = hidden_states.size()
 
         proj = self.W_pack(hidden_states)
-        proj = (
-            proj.unflatten(-1, (3, self.hidden_size))
-            .unsqueeze(0)
-            .transpose(0, -2)
-            .squeeze(-2)
-        )
-        query_states = (
-            proj[0].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        )
-        key_states = (
-            proj[1].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        )
-        value_states = (
-            proj[2].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        )
+        proj = proj.unflatten(-1, (3, self.hidden_size)).unsqueeze(0).transpose(0, -2).squeeze(-2)
+        query_states = proj[0].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = proj[1].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        value_states = proj[2].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
@@ -181,12 +160,12 @@ class BaichuanAttention(torch.nn.Module):
             #     query_states, key_states, value_states, attn_bias=attention_mask
             # )
             with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
-                attn_output = F.scaled_dot_product_attention(query_states, key_states, value_states, attn_mask = attention_mask)
+                attn_output = F.scaled_dot_product_attention(
+                    query_states, key_states, value_states, attn_mask=attention_mask
+                )
             attn_output = attn_output.transpose(1, 2)
         else:
-            attn_weights = torch.matmul(
-                query_states, key_states.transpose(2, 3)
-            ) / math.sqrt(self.head_dim)
+            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
             if attention_mask is not None:
                 if q_len == 1:  # inference with cache
@@ -195,9 +174,7 @@ class BaichuanAttention(torch.nn.Module):
                     else:
                         attention_mask = attention_mask[:, -1:, :]
                 attn_weights = attn_weights + attention_mask
-                attn_weights = torch.max(
-                    attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
-                )
+                attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
 
             attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1)
             attn_output = torch.matmul(attn_weights, value_states)
@@ -223,9 +200,7 @@ class BaichuanLayer(torch.nn.Module):
             hidden_act=config.hidden_act,
         )
         self.input_layernorm = RMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, epsilon=config.rms_norm_eps
-        )
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
 
     def forward(
         self,
@@ -234,9 +209,7 @@ class BaichuanLayer(torch.nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-    ) -> Tuple[
-        torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
-    ]:
+    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
@@ -316,12 +289,8 @@ class BaichuanModel(BaichuanPreTrainedModel):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
         self.n_head = config.num_attention_heads
-        self.embed_tokens = torch.nn.Embedding(
-            config.vocab_size, config.hidden_size, self.padding_idx
-        )
-        self.layers = torch.nn.ModuleList(
-            [BaichuanLayer(config) for _ in range(config.num_hidden_layers)]
-        )
+        self.embed_tokens = torch.nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.layers = torch.nn.ModuleList([BaichuanLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
 
         self.gradient_checkpointing = config.gradient_checkpointing
@@ -339,44 +308,28 @@ class BaichuanModel(BaichuanPreTrainedModel):
     def get_alibi_mask(self, tensor, seq_length_with_past):
         if self.training:
             slopes = torch.Tensor(_get_interleave(self.n_head))
-            position_point = (
-                torch.arange(seq_length_with_past) - seq_length_with_past + 1
-            )
-            position_point = (
-                position_point.unsqueeze(0)
-                .unsqueeze(0)
-                .expand(self.n_head, seq_length_with_past, -1)
-            )
+            position_point = torch.arange(seq_length_with_past) - seq_length_with_past + 1
+            position_point = position_point.unsqueeze(0).unsqueeze(0).expand(self.n_head, seq_length_with_past, -1)
             diag = torch.diag(position_point[0])
-            position_point = position_point - diag.unsqueeze(0).unsqueeze(0).transpose(
-                -1, -2
-            )
+            position_point = position_point - diag.unsqueeze(0).unsqueeze(0).transpose(-1, -2)
             alibi = slopes.unsqueeze(1).unsqueeze(1) * position_point
-            mask = _buffered_future_mask(
-                tensor, seq_length_with_past, alibi, self.n_head
-            )
+            mask = _buffered_future_mask(tensor, seq_length_with_past, alibi, self.n_head)
         else:
             if self.first_run:
                 self.first_run = False
                 self.register_buffer(
                     "future_mask",
-                    _gen_alibi_mask(tensor, self.n_head, self.max_cache_pos).to(
-                        tensor
-                    ),
+                    _gen_alibi_mask(tensor, self.n_head, self.max_cache_pos).to(tensor),
                     persistent=False,
                 )
             if seq_length_with_past > self.max_cache_pos:
                 self.max_cache_pos = seq_length_with_past
                 self.register_buffer(
                     "future_mask",
-                    _gen_alibi_mask(tensor, self.n_head, self.max_cache_pos).to(
-                        tensor
-                    ),
+                    _gen_alibi_mask(tensor, self.n_head, self.max_cache_pos).to(tensor),
                     persistent=False,
                 )
-            mask = self.future_mask[
-                : self.n_head, :seq_length_with_past, :seq_length_with_past
-            ]
+            mask = self.future_mask[: self.n_head, :seq_length_with_past, :seq_length_with_past]
         return mask
 
     def forward(
@@ -391,9 +344,7 @@ class BaichuanModel(BaichuanPreTrainedModel):
         return_dict: Optional[bool] = True,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError(
-                "You cannot provide both input_ids and inputs_embeds simultaneously"
-            )
+            raise ValueError("You cannot provide both input_ids and inputs_embeds simultaneously")
         elif input_ids is not None:
             batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
@@ -401,9 +352,7 @@ class BaichuanModel(BaichuanPreTrainedModel):
         else:
             raise ValueError("You need to provide input_ids or inputs_embeds")
 
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         seq_length_with_past = seq_length
 
@@ -415,13 +364,8 @@ class BaichuanModel(BaichuanPreTrainedModel):
             inputs_embeds = self.embed_tokens(input_ids)
 
         if self.training:
-            if (
-                self.alibi_mask is None
-                or self.alibi_mask.shape[-1] != seq_length_with_past
-            ):
-                self.alibi_mask = self.get_alibi_mask(
-                    inputs_embeds, seq_length_with_past
-                )
+            if self.alibi_mask is None or self.alibi_mask.shape[-1] != seq_length_with_past:
+                self.alibi_mask = self.get_alibi_mask(inputs_embeds, seq_length_with_past)
             alibi_mask = self.alibi_mask
         else:
             alibi_mask = self.get_alibi_mask(inputs_embeds, seq_length_with_past)
@@ -436,15 +380,9 @@ class BaichuanModel(BaichuanPreTrainedModel):
                 expanded_mask = attention_mask
             bsz = inputs_embeds.size(0)
             src_len, tgt_len = alibi_mask.size()[-2:]
-            expanded_mask = (
-                expanded_mask.unsqueeze(1)
-                .expand(bsz, 1, src_len, tgt_len)
-                .to(alibi_mask.dtype)
-            )
+            expanded_mask = expanded_mask.unsqueeze(1).expand(bsz, 1, src_len, tgt_len).to(alibi_mask.dtype)
             inverted_mask = 1.0 - expanded_mask
-            inverted_mask = inverted_mask.masked_fill(
-                inverted_mask.to(torch.bool), torch.finfo(alibi_mask.dtype).min
-            )
+            inverted_mask = inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(alibi_mask.dtype).min)
             attention_mask = inverted_mask + alibi_mask.unsqueeze(0)
         else:
             attention_mask = alibi_mask
@@ -467,9 +405,7 @@ class BaichuanModel(BaichuanPreTrainedModel):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            past_key_value = (
-                past_key_values[idx] if past_key_values is not None else None
-            )
+            past_key_value = past_key_values[idx] if past_key_values is not None else None
 
             if self.gradient_checkpointing and self.training:
 
@@ -511,11 +447,7 @@ class BaichuanModel(BaichuanPreTrainedModel):
 
         next_cache = next_decoder_cache if use_cache else None
         if not return_dict:
-            return tuple(
-                v
-                for v in [hidden_states, next_cache, all_hidden_states, all_self_attns]
-                if v is not None
-            )
+            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=next_cache,
@@ -543,7 +475,10 @@ class NormHead(nn.Module):
             norm_weight = self.weight
         return nn.functional.linear(hidden_states, norm_weight)
 
+
 _init_weights = True
+
+
 @contextmanager
 def no_init_weights(_enable=True):
     global _init_weights
@@ -561,12 +496,18 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
         super().__init__(config, *model_args, **model_kwargs)
         self.model = BaichuanModel(config)
         self.lm_head = NormHead(config.hidden_size, config.vocab_size, bias=False)
-        #if hasattr(config, "quantization_config") and config.quantization_config['load_in_4bit']:
-        if hasattr(config, "quantization_config") and isinstance(config.quantization_config, dict) and config.quantization_config.get('load_in_4bit', False):
+        # if hasattr(config, "quantization_config") and config.quantization_config['load_in_4bit']:
+        if (
+            hasattr(config, "quantization_config")
+            and isinstance(config.quantization_config, dict)
+            and config.quantization_config.get("load_in_4bit", False)
+        ):
+            # 如果选项中开启了 load_in_4bit
             try:
                 from .quantizer import quantize_offline, init_model_weight_int4
             except ImportError:
                 raise ImportError(f"Needs quantize_offline to run quantize.")
+            # 这里调用的是离线量化
             quantize_offline(self, 4)
         # Initialize weights and apply final processing
         self.post_init()
@@ -588,7 +529,7 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
 
     def get_decoder(self):
         return self.model
-    
+
     @classmethod
     def from_pretrained(
         cls,
@@ -604,7 +545,6 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
         use_safetensors: bool = None,
         **kwargs,
     ):
-    
         # Load config if we don't provide a configuration
         if not isinstance(config, PretrainedConfig):
             config_path = config if config is not None else pretrained_model_name_or_path
@@ -625,25 +565,25 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
             )
         else:
             model_kwargs = kwargs
-        
-        if hasattr(config, "quantization_config") and config.quantization_config['load_in_4bit']:
+
+        if hasattr(config, "quantization_config") and config.quantization_config["load_in_4bit"]:
             try:
                 from .quantizer import init_model_weight_int4
                 from accelerate import init_empty_weights, dispatch_model, infer_auto_device_map
                 from accelerate.utils import CustomDtype
                 from accelerate.utils import get_balanced_memory
             except ImportError:
-                raise ImportError(f"Needs import model weight init func to run quantize.") 
+                raise ImportError(f"Needs import model weight init func to run quantize.")
             # Instantiate model.
             init_contexts = [no_init_weights(_enable=True)]
             init_contexts.append(init_empty_weights())
             with ContextManagers(init_contexts):
                 model = cls(config)
-            
-            model_file = os.path.join(pretrained_model_name_or_path, 'pytorch_model.bin')
-            state_dict = torch.load(model_file, map_location="cpu") 
+
+            model_file = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
+            state_dict = torch.load(model_file, map_location="cpu")
             model.is_quantized = True
-                        
+
             device_map = kwargs.pop("device_map", None)
             torch_dtype = kwargs.pop("torch_dtype", None)
             if device_map is not None:
@@ -659,7 +599,7 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
                 kwargs["max_memory"] = max_memory
                 device_map = infer_auto_device_map(model, dtype=target_dtype, **kwargs)
             model = init_model_weight_int4(config, model, state_dict)
-            
+
             # Set model in evaluation mode to deactivate DropOut modules by default
             model.eval()
             # If it is a model with generation capabilities, attempt to load the generation config
@@ -684,16 +624,25 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
                         "Generation config file not found, using a generation config created from the model config."
                     )
                     pass
-            
+
             if device_map is not None:
                 dispatch_model(model, device_map=device_map)
-            
+
             return model
 
-        return super(BaichuanForCausalLM, cls).from_pretrained(pretrained_model_name_or_path, *model_args, 
-                config=config, cache_dir=cache_dir, ignore_mismatched_sizes=ignore_mismatched_sizes, 
-                force_download=force_download, local_files_only=local_files_only, token=token, revision=revision, 
-                use_safetensors=use_safetensors, **kwargs)
+        return super(BaichuanForCausalLM, cls).from_pretrained(
+            pretrained_model_name_or_path,
+            *model_args,
+            config=config,
+            cache_dir=cache_dir,
+            ignore_mismatched_sizes=ignore_mismatched_sizes,
+            force_download=force_download,
+            local_files_only=local_files_only,
+            token=token,
+            revision=revision,
+            use_safetensors=use_safetensors,
+            **kwargs,
+        )
 
     def forward(
         self,
@@ -708,9 +657,7 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
         return_dict: Optional[bool] = True,
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
@@ -754,12 +701,15 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
         )
 
     def quantize(self, bits: int):
+        """
+        这里是在线量化方法
+        """
         try:
             from .quantizer import quantize_online
         except ImportError:
             raise ImportError(f"Needs QLinear to run quantize.")
         return quantize_online(self, bits)
-        
+
     def prepare_inputs_for_generation(
         self,
         input_ids: torch.LongTensor,
@@ -789,13 +739,10 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
     @staticmethod
     def _reorder_cache(past_key_values, beam_idx):
         return tuple(
-            tuple(past_state.index_select(0, beam_idx) for past_state in layer_past)
-            for layer_past in past_key_values
+            tuple(past_state.index_select(0, beam_idx) for past_state in layer_past) for layer_past in past_key_values
         )
 
-    def _build_chat_input(
-        self, tokenizer, messages: List[dict], max_new_tokens: int = 0
-    ):
+    def _build_chat_input(self, tokenizer, messages: List[dict], max_new_tokens: int = 0):
         max_new_tokens = max_new_tokens or self.generation_config.max_new_tokens
         max_input_tokens = self.config.model_max_length - max_new_tokens
         max_input_tokens = max(self.config.model_max_length // 2, max_input_tokens)
@@ -803,15 +750,8 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
         for i, message in enumerate(messages[::-1]):
             content_tokens = tokenizer.encode(message["content"])
             if message["role"] == "user":
-                round_input = (
-                    [self.generation_config.user_token_id]
-                    + content_tokens
-                    + round_input
-                )
-                if (
-                    total_input
-                    and len(total_input) + len(round_input) > max_input_tokens
-                ):
+                round_input = [self.generation_config.user_token_id] + content_tokens + round_input
+                if total_input and len(total_input) + len(round_input) > max_input_tokens:
                     break
                 else:
                     total_input = round_input + total_input
@@ -833,19 +773,22 @@ class BaichuanForCausalLM(BaichuanPreTrainedModel):
         total_input = torch.LongTensor([total_input]).to(self.device)
         return total_input
 
-    def chat(self, tokenizer, messages: List[dict], stream=False,
-             generation_config: Optional[GenerationConfig]=None):
+    def chat(self, tokenizer, messages: List[dict], stream=False, generation_config: Optional[GenerationConfig] = None):
         generation_config = generation_config or self.generation_config
         input_ids = build_chat_input(self, tokenizer, messages, generation_config.max_new_tokens)
         if stream:
             streamer = TextIterStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
-            Thread(target=self.generate, kwargs=dict(
-                inputs=input_ids, streamer=streamer,
-                generation_config=generation_config,
-            )).start()
+            Thread(
+                target=self.generate,
+                kwargs=dict(
+                    inputs=input_ids,
+                    streamer=streamer,
+                    generation_config=generation_config,
+                ),
+            ).start()
             return streamer
         else:
             # 也是调用的 generate 方法, 并解码
             outputs = self.generate(input_ids, generation_config=generation_config)
-            response = tokenizer.decode(outputs[0][len(input_ids[0]):], skip_special_tokens=True)
+            response = tokenizer.decode(outputs[0][len(input_ids[0]) :], skip_special_tokens=True)
             return response
